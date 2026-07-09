@@ -40,6 +40,7 @@ func NewForwarder(ctx context.Context) *Forwarder {
 }
 
 func (f *Forwarder) Wait() error {
+	<-f.groupCtx.Done()
 	return f.group.Wait()
 }
 
@@ -64,12 +65,27 @@ func (f *Forwarder) Reconcile(rules []Rule) error {
 			return err
 		}
 		f.group.Go(func() error {
-			conn, err := ln.Accept()
-			if err != nil {
-				return err
+			<-lnCtx.Done()
+			return ln.Close()
+		})
+		f.group.Go(func() error {
+			wg := &sync.WaitGroup{}
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					wg.Wait()
+					if errors.Is(err, net.ErrClosed) {
+						return nil
+					}
+					return err
+				}
+				wg.Go(func() {
+					err := f.forwardConn(lnCtx, conn, rule)
+					if err != nil {
+						slog.Default().Error("connection forwarding error", "error", err)
+					}
+				})
 			}
-			f.handleConn(lnCtx, conn, rule)
-			return nil
 		})
 	}
 
@@ -80,20 +96,27 @@ func (f *Forwarder) Reconcile(rules []Rule) error {
 	return nil
 }
 
-func (f *Forwarder) handleConn(ctx context.Context, conn net.Conn, rule Rule) {
-	f.group.Go(func() error {
-		dst, err := f.dialer.DialContext(ctx, strings.ToLower(string(rule.Protocol)), rule.Dest)
-		if err != nil {
-			return err
-		}
-		f.group.Go(func() error {
-			_, err := io.Copy(dst, conn)
-			return errors.Join(err, dst.Close())
-		})
-		f.group.Go(func() error {
-			_, err := io.Copy(conn, dst)
-			return errors.Join(err, dst.Close())
-		})
-		return nil
+func (f *Forwarder) forwardConn(ctx context.Context, conn net.Conn, rule Rule) error {
+	dst, err := f.dialer.DialContext(ctx, strings.ToLower(string(rule.Protocol)), rule.Dest)
+	if err != nil {
+		return err
+	}
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		<-groupCtx.Done()
+		return dst.Close()
 	})
+	group.Go(func() error {
+		_, err := io.Copy(dst, conn)
+		return err
+	})
+	group.Go(func() error {
+		_, err := io.Copy(conn, dst)
+		return err
+	})
+	err = group.Wait()
+	if err != nil {
+		return err
+	}
+	return nil
 }
