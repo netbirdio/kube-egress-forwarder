@@ -4,6 +4,7 @@ package forwarder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 
 type Forwarder struct {
 	mu        sync.Mutex
+	dialer    net.Dialer
 	groupCtx  context.Context
 	group     *errgroup.Group
 	lnCancels map[string]context.CancelFunc
@@ -25,7 +27,11 @@ type Forwarder struct {
 
 func NewForwarder(ctx context.Context) *Forwarder {
 	group, groupCtx := errgroup.WithContext(ctx)
+	dialer := net.Dialer{
+		Timeout: 30 * time.Second,
+	}
 	fwd := &Forwarder{
+		dialer:    dialer,
 		groupCtx:  groupCtx,
 		group:     group,
 		lnCancels: map[string]context.CancelFunc{},
@@ -50,7 +56,7 @@ func (f *Forwarder) Reconcile(rules []Rule) error {
 			continue
 		}
 
-		lnCtx, lnCancel := context.WithCancel(context.Background())
+		lnCtx, lnCancel := context.WithCancel(f.groupCtx)
 		f.lnCancels[rule.String()] = lnCancel
 		lc := net.ListenConfig{}
 		ln, err := lc.Listen(lnCtx, strings.ToLower(string(rule.Protocol)), fmt.Sprintf(":%d", rule.Port))
@@ -62,7 +68,7 @@ func (f *Forwarder) Reconcile(rules []Rule) error {
 			if err != nil {
 				return err
 			}
-			f.handleConn(conn, rule)
+			f.handleConn(lnCtx, conn, rule)
 			return nil
 		})
 	}
@@ -74,26 +80,19 @@ func (f *Forwarder) Reconcile(rules []Rule) error {
 	return nil
 }
 
-func (f *Forwarder) handleConn(conn net.Conn, rule Rule) {
+func (f *Forwarder) handleConn(ctx context.Context, conn net.Conn, rule Rule) {
 	f.group.Go(func() error {
-		dialer := net.Dialer{Timeout: 5 * time.Second}
-		dst, err := dialer.Dial(strings.ToLower(string(rule.Protocol)), rule.Dest)
+		dst, err := f.dialer.DialContext(ctx, strings.ToLower(string(rule.Protocol)), rule.Dest)
 		if err != nil {
 			return err
 		}
 		f.group.Go(func() error {
 			_, err := io.Copy(dst, conn)
-			if err != nil {
-				return err
-			}
-			return nil
+			return errors.Join(err, dst.Close())
 		})
 		f.group.Go(func() error {
 			_, err := io.Copy(conn, dst)
-			if err != nil {
-				return err
-			}
-			return nil
+			return errors.Join(err, dst.Close())
 		})
 		return nil
 	})
