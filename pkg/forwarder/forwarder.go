@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0
+
 package forwarder
 
 import (
@@ -79,8 +81,6 @@ func (f *Forwarder) handleConn(conn net.Conn, rule Rule) {
 		if err != nil {
 			return err
 		}
-		defer dst.Close()
-
 		f.group.Go(func() error {
 			_, err := io.Copy(dst, conn)
 			if err != nil {
