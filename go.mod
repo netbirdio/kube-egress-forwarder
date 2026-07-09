@@ -6,7 +6,7 @@ toolchain go1.26.5
 
 require (
 	github.com/go-openapi/testify/v2 v2.6.0
-	golang.org/x/sync v0.19.0
+	golang.org/x/sync v0.22.0
 	k8s.io/api v0.36.2
 	k8s.io/apimachinery v0.36.2
 	k8s.io/client-go v0.36.2
