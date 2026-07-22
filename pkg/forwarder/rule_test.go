@@ -13,13 +13,14 @@ import (
 func TestRuleManager(t *testing.T) {
 	t.Parallel()
 
+	// Everything empty without initial state.
 	ruleMgr, err := NewRuleManager(nil)
 	require.NoError(t, err)
-	require.Empty(t, ruleMgr.initRules)
-	require.Empty(t, ruleMgr.initRules)
 	require.Empty(t, ruleMgr.portIdx)
-	require.Empty(t, ruleMgr.allocRules)
+	require.Empty(t, ruleMgr.initRuleIdx)
+	require.Empty(t, ruleMgr.allocRuleIdx)
 
+	// Rule manager parses initial state.
 	initial := Rule{
 		Protocol: corev1.ProtocolTCP,
 		Port:     1234,
@@ -32,21 +33,26 @@ func TestRuleManager(t *testing.T) {
 	}
 	ruleMgr, err = NewRuleManager(data)
 	require.NoError(t, err)
-	require.Equal(t, []Rule{initial}, ruleMgr.initRules)
 	require.Equal(t, map[string]Rule{"example.com": initial}, ruleMgr.initRuleIdx)
 	require.Equal(t, map[int32]any{initial.Port: nil}, ruleMgr.portIdx)
-	require.Empty(t, ruleMgr.allocRules)
+	require.Empty(t, ruleMgr.allocRuleIdx)
 	require.Equal(t, []Rule{initial}, ruleMgr.AllRules())
 	data, err = ruleMgr.Data()
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{RuleJsonKey: "[]"}, data)
 
-	rule := ruleMgr.Allocate(initial.Protocol, initial.Dest)
-	require.EqualT(t, initial, rule)
-	rule = ruleMgr.Allocate(corev1.ProtocolTCP, "192.168.1.1:6565")
+	// Allocating with existing target returns identical rule.
+	for range 2 {
+		rule := ruleMgr.Allocate(initial.Protocol, initial.Dest)
+		require.EqualT(t, initial, rule)
+		require.Len(t, ruleMgr.allocRuleIdx, 1)
+	}
+
+	// Allocating with new target returns new rule.
+	rule := ruleMgr.Allocate(corev1.ProtocolTCP, "192.168.1.1:6565")
 	require.EqualT(t, corev1.ProtocolTCP, rule.Protocol)
 	require.EqualT(t, "192.168.1.1:6565", rule.Dest)
-	require.Len(t, ruleMgr.allocRules, 2)
+	require.Len(t, ruleMgr.allocRuleIdx, 2)
 	_, err = ruleMgr.Data()
 	require.NoError(t, err)
 }

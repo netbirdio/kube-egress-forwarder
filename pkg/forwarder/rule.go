@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"slices"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 )
@@ -23,10 +25,9 @@ func (r Rule) String() string {
 }
 
 type RuleManager struct {
-	initRules   []Rule
-	initRuleIdx map[string]Rule
-	portIdx     map[int32]any
-	allocRules  []Rule
+	portIdx      map[int32]any
+	initRuleIdx  map[string]Rule
+	allocRuleIdx map[string]Rule
 }
 
 func NewRuleManager(data map[string]string) (*RuleManager, error) {
@@ -49,10 +50,9 @@ func NewRuleManager(data map[string]string) (*RuleManager, error) {
 	}
 
 	pm := &RuleManager{
-		initRules:   initRules,
-		initRuleIdx: initRuleIdx,
-		portIdx:     portIdx,
-		allocRules:  []Rule{},
+		portIdx:      portIdx,
+		initRuleIdx:  initRuleIdx,
+		allocRuleIdx: map[string]Rule{},
 	}
 	return pm, nil
 }
@@ -76,16 +76,30 @@ func (p *RuleManager) Allocate(protocol corev1.Protocol, dest string) Rule {
 			break
 		}
 	}
-	p.allocRules = append(p.allocRules, rule)
+	p.allocRuleIdx[dest] = rule
 	return rule
 }
 
 func (p *RuleManager) AllRules() []Rule {
-	return p.initRules
+	rules := make([]Rule, 0, len(p.initRuleIdx))
+	for _, v := range p.initRuleIdx {
+		rules = append(rules, v)
+	}
+	slices.SortFunc(rules, func(a, b Rule) int {
+		return strings.Compare(a.Dest, b.Dest)
+	})
+	return rules
 }
 
 func (p *RuleManager) Data() (map[string]string, error) {
-	b, err := json.Marshal(p.allocRules)
+	rules := make([]Rule, 0, len(p.allocRuleIdx))
+	for _, v := range p.allocRuleIdx {
+		rules = append(rules, v)
+	}
+	slices.SortFunc(rules, func(a, b Rule) int {
+		return strings.Compare(a.Dest, b.Dest)
+	})
+	b, err := json.Marshal(rules)
 	if err != nil {
 		return nil, err
 	}
