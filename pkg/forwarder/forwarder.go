@@ -58,12 +58,13 @@ func (f *Forwarder) Reconcile(rules []Rule) error {
 		}
 
 		lnCtx, lnCancel := context.WithCancel(f.groupCtx)
-		f.lnCancels[rule.String()] = lnCancel
 		lc := net.ListenConfig{}
 		ln, err := lc.Listen(lnCtx, strings.ToLower(string(rule.Protocol)), fmt.Sprintf(":%d", rule.Port))
 		if err != nil {
+			lnCancel()
 			return err
 		}
+		f.lnCancels[rule.String()] = lnCancel
 		f.group.Go(func() error {
 			<-lnCtx.Done()
 			return ln.Close()
@@ -89,8 +90,9 @@ func (f *Forwarder) Reconcile(rules []Rule) error {
 		})
 	}
 
-	for _, cancel := range oldLnCancels {
+	for key, cancel := range oldLnCancels {
 		cancel()
+		delete(f.lnCancels, key)
 	}
 
 	return nil
