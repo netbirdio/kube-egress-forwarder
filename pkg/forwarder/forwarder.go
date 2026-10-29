@@ -99,26 +99,36 @@ func (f *Forwarder) Reconcile(rules []Rule) error {
 }
 
 func (f *Forwarder) forwardConn(ctx context.Context, conn net.Conn, rule Rule) error {
+	defer func() { _ = conn.Close() }()
 	dst, err := f.dialer.DialContext(ctx, strings.ToLower(string(rule.Protocol)), rule.Dest)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = dst.Close() }()
+
+	// A failed copy or a forwarder shutdown closes both connections, which unblocks the
+	// other copy. A clean end of both copies returns normally and the deferred closes run.
 	group, groupCtx := errgroup.WithContext(ctx)
+	stop := context.AfterFunc(groupCtx, func() {
+		_ = conn.Close()
+		_ = dst.Close()
+	})
+	defer stop()
 	group.Go(func() error {
-		<-groupCtx.Done()
-		return dst.Close()
+		return copyAndCloseWrite(dst, conn)
 	})
 	group.Go(func() error {
-		_, err := io.Copy(dst, conn)
-		return err
+		return copyAndCloseWrite(conn, dst)
 	})
-	group.Go(func() error {
-		_, err := io.Copy(conn, dst)
-		return err
-	})
-	err = group.Wait()
-	if err != nil {
-		return err
+	return group.Wait()
+}
+
+// copyAndCloseWrite copies src to dst until EOF, then half-closes dst so that the peer
+// on that side sees the end of the stream as well.
+func copyAndCloseWrite(dst, src net.Conn) error {
+	_, err := io.Copy(dst, src)
+	if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
 	}
-	return nil
+	return err
 }
